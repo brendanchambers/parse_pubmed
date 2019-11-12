@@ -1,59 +1,40 @@
-# new workflow -
-# download the raw files (alas)
-# next troubleshooting idea: put the socket in /project2 directory
-
-import os
-import gc
 from pyspark import SparkConf, SparkContext
 from pyspark.sql import SQLContext, SparkSession
 from pyspark.sql.types import Row, StructType, StructField, IntegerType, StringType
 
-import time
 from lxml import etree
-import mysql.connector as mysql
+import pymysql
+import json
 
 import random
+import time
+import os
+import gc
 
-# don't forget to modify the env variables (java_home will be set by module load java)
-#    more info: https://spark.apache.org/docs/latest/configuration.html
-#      (/software/java-1.8-x86_64)
-#     of course these ones: PYTHON=`which python`
-#                        export PYSPARK_PYTHON=$PYTHON
-#                        export PYSPARK_DRIVER_PYTHON=$PYTHON
-#                        module load spark/2.3.2
+####################################################
+parserconfig_path = 'parser_config.json'
+####################################################
 
+with open(parserconfig_path, 'r') as f:
+    config = json.load(f)
+print(config)  # temp
 
-#local_data_directory = '/media/midway/pubmed/gz/'  # vizasaur2 bc local path
-local_data_directory = '/project2/jevans/brendan/pubmed_xml_data/gz/'  # midway path
+local_data_directory = config['local_data_directory']
+path2jar = config['path2jar']  # jdbc jar file
+N_EXEC = config['N_executors']  # parallelization width
+client_config = config['client_config']  # mysql connection 
+db_name = config['db_name']
+table_name = config['table_name']
+spark_driver_memory = config['spark_driver_memory_string']
 
-# mysql
-#SUBMIT_ARGS = "--packages mysql:mysql-connector-java:8.0.16 pyspark-shell"  # this works on my local machine
-SUBMIT_ARGS = "--driver-class-path file:///home/brendanchambers/my_resources/mysql-connector-java-8.0.16/mysql-connector-java-8.0.16.jar --jars file:///home/brendanchambers/my_resources/mysql-connector-java-8.0.16/mysql-connector-java-8.0.16.jar pyspark-shell"
+SUBMIT_ARGS = "--driver-class-path file://{} --jars file://{} pyspark-shell".format(path2jar, path2jar)   # build submit_args string
 os.environ["PYSPARK_SUBMIT_ARGS"] = SUBMIT_ARGS
-
-db_name = 'test_pubmed' 
-table_name = 'abstracts_v2' # 'abstracts'
-# db name collisons? https://stackoverflow.com/questions/14011968/user-cant-access-a-database
 
 url = "jdbc:mysql://localhost:3306/{}?useUnicode=true&useJDBCCompliantTimezoneShift=true&useLegacyDatetimeCode=false&serverTimezone=America/Chicago".format(db_name)  # mysql runs on port 3306
 
-#############################f##################
+################################################
 
-client_config = {'unix_socket':'/home/brendanchambers/.sql.sock'} 
-'''
-client_config = {'user':'brendanchambers',
-                 'password':'', 
-                 'host':'localhost',
-                 'unix_socket':'/project2/jevans/study_dbs/mysql/.sql.sock'}  # temp version
-'''
-                # 'password':'',
-#                 'host':'localhost',
-
-# troubleshooting- https://dev.mysql.com/doc/refman/5.5/en/information-functions.html#function_current-user
-#  more - https://forums.mysql.com/read.php?10,512805,512860#msg-512860
-#   docs - https://dev.mysql.com/doc/refman/5.5/en/connection-access.html
-
-db = mysql.connect(**client_config)  # todo obfuscate'
+db = pymysql.connect(**client_config)
 
 # init mysql db
 try:
@@ -68,12 +49,13 @@ except Exception as e:
     print(e)
 
     
-# create table'
+###################################################
+# init db
 
 try:
     print('creating table...')   
 
-    db = mysql.connect(**client_config, database=db_name)
+    db = pymysql.connect(**client_config, database=db_name)
 
     cursor = db.cursor()
     sql = "CREATE TABLE {} (pmid INT,\
@@ -90,25 +72,16 @@ db.commit()
 print(db)
 
 ################################################
-# testing - doing this after db creation
-
-print('initializing spark')
 # init spark
+
+print('initializing spark...')
 conf = SparkConf()
 conf = (conf.setMaster('local[*]')
-       .set('spark.driver.memory','24G')
-       .set("spark.jars", "/home/brendanchambers/my_resources/mysql-connector-java-8.0.16/mysql-connector-java-8.0.16.jar"))        
-'''
-.set('spark.executor.memory','1G')  # 20
-.set('spark.driver.memory','1G')   # 40
-.set('spark.driver.maxResultSize','500M')  #.set('spark.storage.memoryFraction',0))  # this setting is now a legacy option
-.set('spark.python.worker.reuse', 'false')
-.set('spark.python.worker.memory','512m')
-.set('spark.executor.cores','1'))
-'''
+       .set('spark.driver.memory',spark_driver_memory)
+       .set("spark.jars", path2jar))        
+
 sc = SparkContext(conf=conf)
-#sc.addJar('home/brendanchambers/my_resources/mysql-connector-java-8.0.16/mysql-connector-java-8.0.16.jar')  # temp
-spark = SparkSession(sc)  # don't need this for vanilla RDDs
+spark = SparkSession(sc)
 
 print(sc._conf.getAll())
 
@@ -125,18 +98,14 @@ def parse_helper(namestr):
         # for each article:
         title = ''  # init title and abstract in case of missing data
         abstract = ''  # but assume pmid will be present
-        
-        # todo year, journal, authors (update: these are now available in the 'metadata' table)
-
+       
         for child in el.iterchildren():
 
             if child.tag == 'PMID':
                 pmid = int(child.text)
 
             if child.tag == 'Article':
-
                 for article_child in child.iterchildren():
-
                     if article_child.tag == 'ArticleTitle':
                         if article_child.text is not None:
                             title += article_child.text
@@ -145,7 +114,6 @@ def parse_helper(namestr):
                                 title += title_child.tail
 
                     if article_child.tag == 'Abstract':
-
                         for abstract_child in article_child.iterchildren():
                             if abstract_child.tag == 'AbstractText':
                                 if abstract_child.text is not None:
@@ -157,24 +125,16 @@ def parse_helper(namestr):
 
         yield Row(pmid, title, abstract)
 
-    #yield Row(random.randint(0,10000000), namestr, namestr)  # dummy return value for testing
-
-    gc.collect()
+    gc.collect()  # note - probably don't need to do this explicitly
+                  # this is leftover from troubleshooting a mem leak
 
 # get the list of filenames
-
-filenames_list = os.listdir(local_data_directory)
-#filenames_list = filenames_list[:25] # temp
-print(filenames_list[:10])
-# temp:
-dir_brdcst = sc.broadcast(local_data_directory)
-
-
-# todo get list of xml filenames using os listdir
-filenames_rdd = sc.parallelize(filenames_list, 4)  # temp: limit for testing
-print("number of partitions in filenames_rdd: {}".format(filenames_rdd.getNumPartitions()))
-
 print('processing xml files...')
+filenames_list = os.listdir(local_data_directory)
+print(filenames_list[:10])
+dir_brdcst = sc.broadcast(local_data_directory)
+filenames_rdd = sc.parallelize(filenames_list, N_EXEC)
+print("number of partitions in filenames_rdd: {}".format(filenames_rdd.getNumPartitions()))
 
 start_time = time.time()
 print("building abstracts rdd...")
@@ -192,27 +152,13 @@ print('duration: {} s'.format(end_time - start_time))
 
 print('writing dataframe to disk...')
 start_time = time.time()
+abstracts_df.write.format('jdbc').options(
+                          numPartitions=4,  # reduce num partitions to limit parallel db writes
+                          rewriteBatchedStatements=False,
+                          url=url,
+                          dbtable=table_name).mode('overwrite').save()  # or, append
 
-abstracts_df.write.format('jdbc').options(
-                          numPartitions=4,
-                          rewriteBatchedStatements=False,
-                          url=url,
-                          dbtable=table_name).mode('overwrite').save()  # or, append
-'''
-driver = 'com.mysql.cj.jdbc.Driver'
-abstracts_df.write.format('jdbc').options(
-                          numPartitions=4,
-                          rewriteBatchedStatements=False,
-                          url=url,
-                          driver=driver,
-                          dbtable=table_name).mode('overwrite').save()  # or, append
-'''
-# todo load the pwd in from a config file & upload to github
 end_time = time.time()
 print('duration: {} s'.format(end_time - start_time))
 
-print('finished!')
-
-
-
-
+print('finished parsing pubmed xml data to mySQL database!')

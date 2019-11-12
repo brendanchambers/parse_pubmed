@@ -20,6 +20,7 @@ ftp_subdir = '/pubmed/baseline/'
 
 #local_data_directory = '/home/brch/Data/pubmed/xml/'
 #local_data_directory = '/media/midway/pubmed/xml/'
+local_data_directory = '/home/brendan/FastData/pubmed/gz/'
 
 
 ################################################
@@ -27,9 +28,10 @@ print('initializing spark')
 # init spark
 conf = SparkConf()
 conf = (conf.setMaster('local[*]')
-        .set('spark.executor.memory','1G')  # 20
-        .set('spark.driver.memory','8G')   # 40
-        .set('spark.driver.maxResultSize','500M'))  #.set('spark.storage.memoryFraction',0))  # this setting is now a legacy option
+        .set('spark.driver.memory','96G')   # 40
+        .set('spark.driver.maxResultSize','500M'))      
+        #.set('spark.storage.memoryFraction',0))  # this setting is now a legacy option
+        #.set('spark.executor.memory','1G')  # 20 
         #.set('spark.python.worker.reuse', 'false')
         #.set('spark.python.worker.memory','512m')
         #.set('spark.executor.cores','1'))
@@ -63,8 +65,6 @@ def ftp_helper(namestr):
         return e
 
     return True
-
-Create
 
 # get the list of filenames
 
