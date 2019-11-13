@@ -1,5 +1,5 @@
 archive
-.txt
-.csv
-.json
+*.txt
+*.csv
+*.json
 
